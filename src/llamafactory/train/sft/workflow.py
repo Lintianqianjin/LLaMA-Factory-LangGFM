@@ -24,7 +24,7 @@ from ...extras.misc import calculate_tps, get_logits_processor
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
-from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
+from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics
 from .trainer import CustomSeq2SeqTrainer
 
 
@@ -72,17 +72,39 @@ def run_sft(
 
     # Metric utils
     metric_module = {}
-    if training_args.predict_with_generate:
-        metric_module["compute_metrics"] = ComputeSimilarity(tokenizer=tokenizer)
-    elif finetuning_args.compute_accuracy:
-        metric_module["compute_metrics"] = ComputeAccuracy()
-        metric_module["preprocess_logits_for_metrics"] = eval_logit_processor
+    # if training_args.predict_with_generate:
+    #     # metric_module["compute_metrics"] = ComputeSimilarity(tokenizer=tokenizer)
+    #     metric_module["compute_metrics"] = ComputeExactMatch(tokenizer=tokenizer)
+    #     # metric_module["compute_metrics"] = ComputeRegressionMetrics(tokenizer=tokenizer)
+    # elif finetuning_args.compute_accuracy:
+    #     metric_module["compute_metrics"] = ComputeAccuracy()
+    #     metric_module["preprocess_logits_for_metrics"] = eval_logit_processor
+    
+    metric_module["evaluation_settings_dict"] = {
+        "experiments__debug__shortest_path_3200__test": {
+            "compute_metrics": ComputeExactMatch(tokenizer=tokenizer),
+            "gen_kwargs": {
+                "do_sample": False,
+                "max_new_tokens": 4,
+            },
+        },
+        "experiments__debug__movielens1m__test": {
+            "compute_metrics": ComputeRegressionMetrics(tokenizer=tokenizer),
+            "gen_kwargs": {
+                "do_sample": False,
+                "max_new_tokens": 32
+            },
+        },
+    }
 
     # Keyword arguments for `model.generate`
     gen_kwargs = generating_args.to_dict(obey_generation_config=True)
     gen_kwargs["eos_token_id"] = [tokenizer.eos_token_id] + tokenizer.additional_special_tokens_ids
     gen_kwargs["pad_token_id"] = tokenizer.pad_token_id
     gen_kwargs["logits_processor"] = get_logits_processor()
+    
+    if training_args.predict_with_generate:
+        tokenizer.padding_side = "left"  # use left-padding in generation
 
     # Initialize our Trainer
     trainer = CustomSeq2SeqTrainer(
@@ -111,9 +133,6 @@ def run_sft(
         trainer.save_state()
         if trainer.is_world_process_zero() and finetuning_args.plot_loss:
             plot_loss(training_args.output_dir, keys=["loss", "eval_loss", "eval_accuracy"])
-
-    if training_args.predict_with_generate:
-        tokenizer.padding_side = "left"  # use left-padding in generation
 
     # Evaluation
     if training_args.do_eval:

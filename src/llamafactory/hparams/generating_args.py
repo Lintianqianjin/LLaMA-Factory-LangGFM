@@ -70,6 +70,14 @@ class GeneratingArguments:
         default=True,
         metadata={"help": "Whether or not to remove special tokens in the decoding."},
     )
+    output_logits: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to output logits in the decoding."},
+    )
+    return_dict_in_generate: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to return a dictionary in the decoding."},
+    )
 
     def to_dict(self, obey_generation_config: bool = False) -> Dict[str, Any]:
         args = asdict(self)

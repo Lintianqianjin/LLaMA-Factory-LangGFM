@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 from transformers import Seq2SeqTrainer
 from typing_extensions import override
 
@@ -53,6 +54,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         finetuning_args: "FinetuningArguments",
         processor: Optional["ProcessorMixin"],
         gen_kwargs: Optional[Dict[str, Any]] = None,
+        evaluation_settings_dict = None,
         **kwargs,
     ) -> None:
         if is_transformers_version_greater_than("4.46"):
@@ -62,9 +64,11 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
         super().__init__(**kwargs)
         self.finetuning_args = finetuning_args
+        self.evaluation_settings_dict = evaluation_settings_dict
         if gen_kwargs is not None:
             # https://github.com/huggingface/transformers/blob/v4.45.0/src/transformers/trainer_seq2seq.py#L287
             self._gen_kwargs = gen_kwargs
+            self.common_default_gen_kwargs = self._gen_kwargs.copy()
 
         if processor is not None:
             self.add_callback(SaveProcessorCallback(processor))
@@ -94,7 +98,41 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             return torch.utils.data.SequentialSampler(self.train_dataset)
 
         return super()._get_train_sampler()
-
+    
+    @override
+    def evaluate(
+        self,
+        eval_dataset: Optional[Dataset] = None,
+        ignore_keys: Optional[List[str]] = None,
+        metric_key_prefix: str = "eval",
+        **gen_kwargs,
+    ) -> Dict[str, float]:
+        
+        # _gen_kwargs = self._gen_kwargs
+        # _gen_kwargs.update(gen_kwargs)
+        # if do_sample in gen_kwargs, and it is False, then remove temperature, top_k, top_p
+        # print(f"\n{gen_kwargs=}\n")
+        
+        # print(f"\n {eval_dataset=} \n")
+        
+        # this function will be called first when evaluating
+        # eval_dataset is None first (if not provided), then Seq2SeqTrainer.evaluate() will call Trainer.evaluate()
+        # and Trainer.evaluate() will use self.eval_dataset, which is set in initialization.
+        # and Trainer.evaluate() will call self.evaluate, which is this function, with the provided eval_dataset
+        # we can set the gen_kwargs for the provided eval_dataset according to the self.evaluation_settings_dict
+        # so that we can use different gen_kwargs for different eval_dataset
+        
+        if eval_dataset is not None and self.evaluation_settings_dict is not None:
+            eval_dataset_setting = self.evaluation_settings_dict[eval_dataset]
+            self.compute_metrics = eval_dataset_setting["compute_metrics"]
+            # custom gen_kwargs > the default gen_kwargs
+            gen_kwargs.update(self.common_default_gen_kwargs)
+            gen_kwargs.update(eval_dataset_setting["gen_kwargs"])
+            print(f"Evaluation on {eval_dataset} with {gen_kwargs=}")
+            # gen_kwargs will be set to self._gen_kwargs in Seq2SeqTrainer.evaluate() function
+            # and self._gen_kwargs will be used as gen_kwargs in model.generate() in prediction_step function
+        return super().evaluate(eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix, **gen_kwargs)
+    
     @override
     def prediction_step(
         self,
