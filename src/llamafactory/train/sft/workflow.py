@@ -24,7 +24,7 @@ from ...extras.misc import calculate_tps, get_logits_processor
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
-from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics
+from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics, ComputeAucMetrics
 from .trainer import CustomSeq2SeqTrainer
 
 
@@ -85,7 +85,7 @@ def run_sft(
             "compute_metrics": ComputeExactMatch(tokenizer=tokenizer),
             "gen_kwargs": {
                 "do_sample": False,
-                "max_new_tokens": 4,
+                "max_new_tokens": 32,
             },
         },
         "experiments__debug__movielens1m__test": {
@@ -93,6 +93,15 @@ def run_sft(
             "gen_kwargs": {
                 "do_sample": False,
                 "max_new_tokens": 32
+            },
+        },
+        "experiments__debug__bace__test": {
+            "compute_metrics": ComputeAucMetrics(tokenizer=tokenizer),
+            "gen_kwargs": {
+                "do_sample": False,
+                "max_new_tokens": 32,
+                "output_logits": True,
+                "return_dict_in_generate": True,
             },
         },
     }
