@@ -24,7 +24,7 @@ from ...extras.misc import calculate_tps, get_logits_processor
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
-from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics, ComputeAucMetrics
+from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics, ComputeAucMetrics, BinaryClassificationProbabilityCalculator
 from .trainer import CustomSeq2SeqTrainer
 
 
@@ -85,7 +85,7 @@ def run_sft(
             "compute_metrics": ComputeExactMatch(tokenizer=tokenizer),
             "gen_kwargs": {
                 "do_sample": False,
-                "max_new_tokens": 32,
+                "max_new_tokens": 64,
             },
         },
         "experiments__debug__movielens1m__test": {
@@ -97,6 +97,8 @@ def run_sft(
         },
         "experiments__debug__bace__test": {
             "compute_metrics": ComputeAucMetrics(tokenizer=tokenizer),
+            "preprocess_generated_output_logits_for_metrics": BinaryClassificationProbabilityCalculator(
+                tokenizer=tokenizer, positive_token_text=" Yes", negative_token_text=" No"), # space is needed
             "gen_kwargs": {
                 "do_sample": False,
                 "max_new_tokens": 32,
@@ -114,7 +116,10 @@ def run_sft(
     
     if training_args.predict_with_generate:
         tokenizer.padding_side = "left"  # use left-padding in generation
-
+    
+    # print(f"{dataset_module['eval_dataset']=}")
+    # print(f"{dataset_module['eval_dataset']['experiments__debug__bace__test']['labels']=}")
+    # exit()
     # Initialize our Trainer
     trainer = CustomSeq2SeqTrainer(
         model=model,

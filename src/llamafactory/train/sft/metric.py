@@ -66,6 +66,47 @@ def eval_logit_processor(logits: "torch.Tensor", labels: "torch.Tensor") -> "tor
     return torch.argmax(logits, dim=-1)
 
 
+
+class BinaryClassificationProbabilityCalculator:
+    def __init__(self, tokenizer, positive_token_text="Yes", negative_token_text="No"):
+        """
+        Initializes with a tokenizer, positive token text, and negative token text.
+        Computes the token ids for both positive and negative tokens.
+        Note: This assumes that each token text corresponds to a single token.
+        """
+        positive_token_ids = tokenizer.encode(positive_token_text, add_special_tokens=False)
+        negative_token_ids = tokenizer.encode(negative_token_text, add_special_tokens=False)
+        
+        if len(positive_token_ids) != 1 or len(negative_token_ids) != 1:
+            raise ValueError("positive_token_text and negative_token_text must each correspond to a single token")
+        
+        self.positive_token_id = positive_token_ids[0]
+        self.negative_token_id = negative_token_ids[0]
+        # print(f"{self.positive_token_id=}, {self.negative_token_id=}")
+        # exit()
+    
+    def __call__(self, output_logits):
+        """
+        Takes output_logits (shape [batch_size, sequence_length, vocab_size]) and returns a tensor 
+        of shape [batch_size, sequence_length], where each element is the probability of the positive token.
+        """
+        # Extract logits for the positive and negative tokens
+        positive_logits = output_logits[:, :, self.positive_token_id]
+        negative_logits = output_logits[:, :, self.negative_token_id]
+        
+        # Stack the logits to form a tensor of shape [batch_size, sequence_length, 2]
+        # combined_logits = torch.stack([positive_logits, negative_logits], dim=-1)
+        logit_diff = positive_logits - negative_logits
+        
+        # Apply softmax on the last dimension to obtain the probability distribution
+        # probabilities = torch.softmax(combined_logits, dim=-1)
+        positive_prob = 1 / (1 + torch.exp(-logit_diff))
+        
+        # print(positive_prob.shape)
+        # Return the probability corresponding to the positive token (assumed at index 0)
+        return positive_prob
+
+
 @dataclass
 class ComputeAccuracy:
     r"""
@@ -322,9 +363,10 @@ class ComputeAucMetrics:
     extracting the logits for Yes/No tokens, and computing AUC based on the true labels.
     """
     tokenizer: Any
-    yes_token_id: Optional[int] = None
-    no_token_id: Optional[int] = None
     score_dict: Dict[str, List[float]] = field(default_factory=lambda: {"auc": []})
+    positive_text: str = "Yes"
+    negative_text: str = "No"
+    
     
     def _dump(self) -> Optional[Dict[str, float]]:
         """Compute final metrics from accumulated scores and reset score_dict."""
@@ -339,58 +381,26 @@ class ComputeAucMetrics:
     
     def __post_init__(self):
         """Initialize token IDs and reset scores after initialization."""
-        # Get token IDs for "Yes" and "No" if not provided
-        if self.yes_token_id is None:
-            self.yes_token_id = self.tokenizer.convert_tokens_to_ids("Yes")
-        if self.no_token_id is None:
-            self.no_token_id = self.tokenizer.convert_tokens_to_ids("No")
-        
-        # If using a subword tokenizer, we might need to get the full word tokens
-        if self.yes_token_id == self.tokenizer.unk_token_id:
-            # Try different cases or with leading space
-            potential_yes_tokens = ["Yes", "yes", " Yes", " yes"]
-            potential_no_tokens = ["No", "no", " No", " no"]
-            
-            for token in potential_yes_tokens:
-                token_id = self.tokenizer.convert_tokens_to_ids(token)
-                if token_id != self.tokenizer.unk_token_id:
-                    self.yes_token_id = token_id
-                    break
-            
-            for token in potential_no_tokens:
-                token_id = self.tokenizer.convert_tokens_to_ids(token)
-                if token_id != self.tokenizer.unk_token_id:
-                    self.no_token_id = token_id
-                    break
-        
-        # Reset the score dictionary
+        # Get the token IDs for "<answer>"
+        self.answer_tag_tokens = self.tokenizer.encode("<answer>", add_special_tokens=False)
         self._dump()
     
-    def extract_answer_tag_content(self, text: str) -> str:
-        """Extract content within the <answer> tag from text."""
-        import re
-        match = re.search(r'<answer>\s*(\w+)\s*</answer>', text)
-        if match:
-            return match.group(1).strip()
-        return ""
-    
-    def extract_label_from_ids(self, label_ids) -> int:
-        """Extract label (0=No, 1=Yes) from label token IDs by finding <answer> tag."""
-        # Decode the label token IDs to text
-        decoded_label = self.tokenizer.decode(label_ids, skip_special_tokens=True)
+    def find_token_position(self, pred_tokens, target_token_idx_in_answer=0):
+        # Convert pred_tokens to a list if it's a tensor or array
+        if not isinstance(pred_tokens, list):
+            pred_tokens = pred_tokens.tolist()
         
-        # Extract content within <answer> tag
-        answer_content = self.extract_answer_tag_content(decoded_label)
-        
-        # Determine label value
-        if answer_content.lower() == "yes":
-            return 1
-        elif answer_content.lower() == "no":
-            return 0
-        else:
-            # If no clear answer found, use a default value
-            return -1  # or some appropriate default
+        # Find where the answer tag appears in pred_tokens
+        for idx in range(len(pred_tokens) - len(self.answer_tag_tokens) + 1):
+            if pred_tokens[idx:idx+len(self.answer_tag_tokens)] == self.answer_tag_tokens:
+                # The response starts right after the "<answer>" tag
+                response_start_idx = idx + len(self.answer_tag_tokens)
+                
+                # The i-th token position is response_start_idx + i
+                return response_start_idx + target_token_idx_in_answer
     
+        return None  # Tag not found
+
     def __call__(self, eval_preds: "EvalPrediction", compute_result: bool = True) -> Optional[Dict[str, float]]:
         """
         Process each prediction and compute AUC.
@@ -402,134 +412,107 @@ class ComputeAucMetrics:
         Returns:
             Dictionary with metrics if compute_result is True, otherwise None
         """
-        predictions, labels = numpify(eval_preds.predictions), numpify(eval_preds.label_ids)
+        predictions, label_ids = numpify(eval_preds.predictions), numpify(eval_preds.label_ids)
+        pred_tokens, postive_token_prob = predictions # output_logits shape -> [batch_size, response_sequence_length]
         
-        # Handle different prediction formats
-        if isinstance(predictions, tuple) and len(predictions) >= 2:
-            logits, _ = predictions
-        else:
-            logits = predictions[0] if isinstance(predictions, tuple) else predictions
+        # print(f"{output_logits=}")
+        # print(f"{output_logits.shape=}")
+        # exit()
         
-        # Process each sample
-        for i in range(len(logits)):
-            # Skip if we're out of bounds
-            if i >= len(labels):
-                continue
-                
-            # Extract label from the label IDs
-            label_ids = labels[i]
-            # Filter out padding tokens if necessary
-            valid_label_ids = [id for id in label_ids if id != self.tokenizer.pad_token_id]
-            true_label = self.extract_label_from_ids(valid_label_ids)
-            
-            # Skip samples where label couldn't be determined
-            if true_label == -1:
-                continue
-            
-            # Decode prediction to text to find <answer> tag
-            pred_tokens = np.argmax(logits[i], axis=-1)
-            decoded_pred = self.tokenizer.decode(pred_tokens, skip_special_tokens=True)
-            answer_content = self.extract_answer_tag_content(decoded_pred)
-            
-            # Default probability if we can't determine
-            yes_prob = 0.5
-            
-            # If Yes or No is directly extracted from text
-            if answer_content.lower() == "yes":
-                yes_prob = 1.0
-            elif answer_content.lower() == "no":
-                yes_prob = 0.0
-            else:
-                # Try to get probabilities from logits
-                # Encode the text to find position of <answer> tag
-                encoded_pred = self.tokenizer.encode(decoded_pred, add_special_tokens=False)
-                answer_tag_tokens = self.tokenizer.encode("<answer>", add_special_tokens=False)
-                
-                try:
-                    for j in range(len(encoded_pred) - len(answer_tag_tokens)):
-                        if encoded_pred[j:j+len(answer_tag_tokens)] == answer_tag_tokens:
-                            # Found position after <answer> tag
-                            position = j + len(answer_tag_tokens)
-                            
-                            # Get logits at this position
-                            if position < logits[i].shape[0]:
-                                # Get logits for Yes and No tokens
-                                yes_logit = logits[i, position, self.yes_token_id]
-                                no_logit = logits[i, position, self.no_token_id]
-                                
-                                # Apply softmax considering only these two tokens
-                                scores = np.array([no_logit, yes_logit])
-                                yes_prob = F.softmax(torch.tensor(scores), dim=0)[1].item()
-                                break
-                except Exception as e:
-                    print(f"Error processing prediction {i}: {e}")
-            
-            # Calculate AUC for this single sample (either 0 or 1)
-            # For single samples, AUC is 1 if prediction is correct, 0 if incorrect, 0.5 if undecided
-            single_sample_auc = 1.0 if (yes_prob > 0.5 and true_label == 1) or (yes_prob < 0.5 and true_label == 0) else 0.0
-            
-            # Accumulate the score
-            self.score_dict["auc"].append(single_sample_auc)
-        
-        # If we have enough samples, calculate AUC across all samples
-        if len(self.score_dict["auc"]) >= 2:
-            # Collect all yes_probs and true_labels for proper AUC calculation
-            yes_probs = []
-            true_labels = []
-            
-            # Process each sample again for proper AUC
-            for i in range(len(logits)):
-                if i >= len(labels):
-                    continue
-                    
-                label_ids = labels[i]
-                valid_label_ids = [id for id in label_ids if id != self.tokenizer.pad_token_id]
-                true_label = self.extract_label_from_ids(valid_label_ids)
-                
-                if true_label == -1:
-                    continue
-                
-                pred_tokens = np.argmax(logits[i], axis=-1)
-                decoded_pred = self.tokenizer.decode(pred_tokens, skip_special_tokens=True)
-                answer_content = self.extract_answer_tag_content(decoded_pred)
-                
-                yes_prob = 0.5
-                
-                if answer_content.lower() == "yes":
-                    yes_prob = 1.0
-                elif answer_content.lower() == "no":
-                    yes_prob = 0.0
+        # left_padding of labels is INGOE_INDEX due to pad_to_multiple_of for GPU efficient computing
+        # Extract ground truth labels (1 for Yes, 0 for No)
+        label_ids = np.where(label_ids != IGNORE_INDEX, label_ids, self.tokenizer.pad_token_id)
+        label_texts = self.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+        true_labels = []
+        for label_text in label_texts:            
+            # Extract Yes/No from <answer> tag
+            answer_match = re.search(r'<answer>(.*?)</answer>', label_text)
+            if answer_match:
+                answer_text = answer_match.group(1).strip()
+                if answer_text == self.positive_text:
+                    true_labels.append(1)
+                elif answer_text == self.negative_text:
+                    true_labels.append(0)
                 else:
-                    # Same logic to extract probability from logits as above
-                    encoded_pred = self.tokenizer.encode(decoded_pred, add_special_tokens=False)
-                    answer_tag_tokens = self.tokenizer.encode("<answer>", add_special_tokens=False)
-                    
-                    try:
-                        for j in range(len(encoded_pred) - len(answer_tag_tokens)):
-                            if encoded_pred[j:j+len(answer_tag_tokens)] == answer_tag_tokens:
-                                position = j + len(answer_tag_tokens)
-                                
-                                if position < logits[i].shape[0]:
-                                    yes_logit = logits[i, position, self.yes_token_id]
-                                    no_logit = logits[i, position, self.no_token_id]
-                                    
-                                    scores = np.array([no_logit, yes_logit])
-                                    yes_prob = F.softmax(torch.tensor(scores), dim=0)[1].item()
-                                    break
-                    except Exception:
-                        pass
-                
-                yes_probs.append(yes_prob)
-                true_labels.append(true_label)
+                    raise ValueError(f"Unknown answer text: {answer_text}")
+            else:
+                raise ValueError("No <answer> tag found in label")
+            # print(f"{label_text=}, Assigned Label={true_labels[-1]}")
+        # left padding of pred_tokens is pad_token_id (padded in input_ids)
+        # right padding of pred_tokens is IGNORE_INDEX (padded in EvalLoopContainer.add)
+        # Extract predicted probabilities
+        pred_tokens = np.where(pred_tokens != IGNORE_INDEX, pred_tokens, self.tokenizer.pad_token_id)
+        pred_texts = self.tokenizer.batch_decode(pred_tokens, skip_special_tokens=True)
+        
+        # def extract_non_special_tokens(tokenizer, tokens):
+        #     """
+        #     参数:
+        #     tokenizer: 已初始化的tokenizer，需提供：
+        #         - tokenizer.all_special_tokens: 一个列表，包含所有special token（例如"[CLS]"、"[SEP]"等）
+        #         - tokenizer.convert_tokens_to_string: 将一个token列表转换成对应的文本piece
+        #     tokens: token的列表，可能包含special tokens
+
+        #     返回:
+        #     一个字典，键为非special token（注意：如果有重复token，后者会覆盖前者），
+        #     值为一个字典，包含两个键：
+        #         - "text_piece": 对应的文本piece
+        #         - "non_special_index": 该token在所有非special token中的顺序（从0开始）
+        #     """
+        #     result = []
+        #     non_special_counter = 0
+
+        #     for token in tokens:
+        #         # 如果该token是special token，则跳过
+        #         text_piece = tokenizer.decode([token])
+        #         if text_piece in tokenizer.all_special_tokens:
+        #             continue
+        #         result.append((
+        #             non_special_counter, text_piece, int(token)
+        #         ))
+        #         non_special_counter += 1
+
+        #     return result
+
+
+        predicted_probs = []
+        for sample_idx, pred_text in enumerate(pred_texts):
             
-            # Calculate proper AUC if we have enough samples
-            if len(yes_probs) >= 2 and len(set(true_labels)) > 1:
-                try:
-                    batch_auc = roc_auc_score(true_labels, yes_probs)
-                    # Replace individual sample scores with the proper batch AUC
-                    self.score_dict["auc"] = [batch_auc]
-                except ValueError as e:
-                    print(f"AUC calculation error: {e}")
+            # print(f"\n{label_texts[sample_idx]=}\n")
+            # print(f"\n{label_ids[sample_idx]=}\n")
+
+
+            # print(f"\n{pred_text=}\n")
+            sample_pred_tokens = pred_tokens[sample_idx]
+            # ignore left padding
+            sample_pred_tokens = sample_pred_tokens[sample_pred_tokens != self.tokenizer.pad_token_id]
+            # print(f"\n{sample_pred_tokens=}\n")
+            # print(f"\n{pred_tokens[sample_idx]=}\n")
+            # token_text_mapping = extract_non_special_tokens(self.tokenizer, pred_tokens[sample_idx])
+            # print(f"\n{token_text_mapping=}\n")
+            # exit()
+            # Extract text from <answer> tag
+            answer_match = re.search(r'<answer>(.*?)</answer>', pred_text)
+            
+            if not answer_match:
+                # No <answer> tag found
+                predicted_probs.append(0.5)
+                continue
+            
+            answer_text = answer_match.group(1).strip()
+            
+            if answer_text not in [self.positive_text, self.negative_text]:
+                # Answer is neither Yes nor No
+                predicted_probs.append(0.5)
+                continue
+            
+            
+            classification_target_token_idx = self.find_token_position(sample_pred_tokens, target_token_idx_in_answer=0)
+            # print(f"{classification_target_token_idx=}")
+            predicted_probs.append(postive_token_prob[sample_idx][classification_target_token_idx])
+        
+        # compute AUC
+        auc_score = roc_auc_score(true_labels, predicted_probs)
+        self.score_dict["auc"] = [auc_score]
         
         if compute_result:
             return self._dump()
