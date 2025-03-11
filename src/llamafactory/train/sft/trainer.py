@@ -442,6 +442,8 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         #     model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys, **gen_kwargs
         # )
         
+        # print(f"{self.args.predict_with_generate=}, {prediction_loss_only=}")
+        # exit()
         if not self.args.predict_with_generate or prediction_loss_only:
             return super().prediction_step(
                 model, inputs, prediction_loss_only=prediction_loss_only, ignore_keys=ignore_keys

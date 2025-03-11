@@ -723,5 +723,32 @@
             "response": "output",
             "system": "system"
         }
+    },
+    "experiments__expressivity__zinc_sub__train": {
+        "file_name": "experiments__expressivity__zinc_sub__train.json",
+        "columns": {
+            "prompt": "instruction",
+            "query": "input",
+            "response": "output",
+            "system": "system"
+        }
+    },
+    "experiments__expressivity__zinc_sub__test": {
+        "file_name": "experiments__expressivity__zinc_sub__test.json",
+        "columns": {
+            "prompt": "instruction",
+            "query": "input",
+            "response": "output",
+            "system": "system"
+        }
+    },
+    "experiments__expressivity__zinc_sub__valid": {
+        "file_name": "experiments__expressivity__zinc_sub__valid.json",
+        "columns": {
+            "prompt": "instruction",
+            "query": "input",
+            "response": "output",
+            "system": "system"
+        }
     }
 }

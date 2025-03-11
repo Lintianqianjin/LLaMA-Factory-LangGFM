@@ -205,7 +205,7 @@ class ComputeExactMatch:
             result = {k: float(np.mean(v)) for k, v in self.score_dict.items()}
 
         self.score_dict = {"exact_match": []}
-        print(f"{result=}")
+        # print(f"{result=}")
         return result
 
     def __post_init__(self):
@@ -221,20 +221,21 @@ class ComputeExactMatch:
         decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
         
         for pred, label in zip(decoded_preds, decoded_labels):
-            print(f"pred : {pred}")
-            print(f"label: {label}")
-            print("\n")
+            # print(f"pred : {pred}")
+            # print(f"label: {label}")
+            # print("\n")
             if pred == label:
                 self.score_dict["exact_match"].append(1)
             else:
                 self.score_dict["exact_match"].append(0)
-            print(f"pred == label, {pred == label}")
+            # print(f"pred == label, {pred == label}")
             
         if compute_result:
-            print(f"Sample Count: {len(preds)=}")
+            # print(f"Sample Count: {len(preds)=}")
             return self._dump()
 
 
+from langgfm.utils.number_process import NumberFormatter
 @dataclass
 class ComputeRegressionMetrics:
     """
@@ -251,7 +252,7 @@ class ComputeRegressionMetrics:
         result = None
         if hasattr(self, "score_dict"):
             result = {k: float(np.mean(v)) for k, v in self.score_dict.items()}
-            print(f"{result=}")
+            # print(f"{result=}")
         self.score_dict = {
             "mae": [],
             "rmse": [],
@@ -273,12 +274,18 @@ class ComputeRegressionMetrics:
         if answer_match:
             content = answer_match.group(1).strip()
             # Try to extract a number (float or int) from the content
-            number_pattern = re.compile(r'[-+]?\d*\.?\d+')
-            number_match = number_pattern.search(content)
-            if number_match:
-                num_str = number_match.group(0)
-                # Convert to float (works for both integers and floats)
-                return float(num_str)
+            # number_pattern = re.compile(r'[-+]?\d*\.?\d+')
+            # number_match = number_pattern.search(content)
+            try:
+                number_match = NumberFormatter.parse_formatted_text(content)
+                return number_match
+            except:
+                return 0.0
+            # if number_match:
+            #     # num_str = number_match
+            #     # Convert to float (works for both integers and floats)
+            #     # return float(num_str)
+            #     return number_match
         
         return 0.0
     
@@ -302,9 +309,8 @@ class ComputeRegressionMetrics:
         label_values = []
         
         for pred, label in zip(decoded_preds, decoded_labels):
-            print(f"pred : {pred}")
-            print(f"label: {label}")
-            print("\n")
+            
+            # print("\n")
             # Extract values
             pred_value = self.extract_value_from_text(pred)
             label_value = self.extract_value_from_text(label)
@@ -316,6 +322,9 @@ class ComputeRegressionMetrics:
             self.score_dict["mae"].append(abs(pred_value - label_value))
             self.score_dict["rmse"].append((pred_value - label_value)**2)
             
+            print("\n")
+            print(f"pred : {pred}")
+            print(f"label: {label}")
             print(f"Extracted: pred={pred_value}, label={label_value}, diff={abs(pred_value - label_value)}")
             print("\n")
             
@@ -350,7 +359,7 @@ class ComputeRegressionMetrics:
             self.score_dict["pearson_corr"] = [0.0]
             
         if compute_result:
-            print(f"Sample Count: {len(preds)=}")
+            # print(f"Sample Count: {len(preds)=}")
             return self._dump()
 
 

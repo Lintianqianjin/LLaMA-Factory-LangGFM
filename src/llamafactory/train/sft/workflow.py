@@ -26,7 +26,7 @@ from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
 from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor, ComputeExactMatch, ComputeRegressionMetrics, ComputeAucMetrics, BinaryClassificationProbabilityCalculator
 from .trainer import CustomSeq2SeqTrainer
-
+from .utils import get_evaluation_settings
 
 if TYPE_CHECKING:
     from transformers import Seq2SeqTrainingArguments, TrainerCallback
@@ -72,6 +72,9 @@ def run_sft(
 
     # Metric utils
     metric_module = {}
+    metric_module["evaluation_settings_dict"] = {
+        dataset_name: get_evaluation_settings(dataset_name=dataset_name,tokenizer=tokenizer) for dataset_name in dataset_module["eval_dataset"].keys()
+    }
     # if training_args.predict_with_generate:
     #     # metric_module["compute_metrics"] = ComputeSimilarity(tokenizer=tokenizer)
     #     metric_module["compute_metrics"] = ComputeExactMatch(tokenizer=tokenizer)
@@ -80,33 +83,33 @@ def run_sft(
     #     metric_module["compute_metrics"] = ComputeAccuracy()
     #     metric_module["preprocess_logits_for_metrics"] = eval_logit_processor
     
-    metric_module["evaluation_settings_dict"] = {
-        "experiments__debug__shortest_path_3200__test": {
-            "compute_metrics": ComputeExactMatch(tokenizer=tokenizer),
-            "gen_kwargs": {
-                "do_sample": False,
-                "max_new_tokens": 64,
-            },
-        },
-        "experiments__debug__movielens1m__test": {
-            "compute_metrics": ComputeRegressionMetrics(tokenizer=tokenizer),
-            "gen_kwargs": {
-                "do_sample": False,
-                "max_new_tokens": 32
-            },
-        },
-        "experiments__debug__bace__test": {
-            "compute_metrics": ComputeAucMetrics(tokenizer=tokenizer),
-            "preprocess_generated_output_logits_for_metrics": BinaryClassificationProbabilityCalculator(
-                tokenizer=tokenizer, positive_token_text=" Yes", negative_token_text=" No"), # space is needed
-            "gen_kwargs": {
-                "do_sample": False,
-                "max_new_tokens": 32,
-                "output_logits": True,
-                "return_dict_in_generate": True,
-            },
-        },
-    }
+    # metric_module["evaluation_settings_dict"] = {
+    #     "experiments__debug__shortest_path_3200__test": {
+    #         "compute_metrics": ComputeExactMatch(tokenizer=tokenizer),
+    #         "gen_kwargs": {
+    #             "do_sample": False,
+    #             "max_new_tokens": 64,
+    #         },
+    #     },
+    #     "experiments__debug__movielens1m__test": {
+    #         "compute_metrics": ComputeRegressionMetrics(tokenizer=tokenizer),
+    #         "gen_kwargs": {
+    #             "do_sample": False,
+    #             "max_new_tokens": 32
+    #         },
+    #     },
+    #     "experiments__debug__bace__test": {
+    #         "compute_metrics": ComputeAucMetrics(tokenizer=tokenizer),
+    #         "preprocess_generated_output_logits_for_metrics": BinaryClassificationProbabilityCalculator(
+    #             tokenizer=tokenizer, positive_token_text=" Yes", negative_token_text=" No"), # space is needed
+    #         "gen_kwargs": {
+    #             "do_sample": False,
+    #             "max_new_tokens": 32,
+    #             "output_logits": True,
+    #             "return_dict_in_generate": True,
+    #         },
+    #     },
+    # }
 
     # Keyword arguments for `model.generate`
     gen_kwargs = generating_args.to_dict(obey_generation_config=True)
